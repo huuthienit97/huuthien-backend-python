@@ -9,4 +9,6 @@ app_name = 'users'
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('verify-email/', views.verify_email, name='verify-email'),
+    path('resend-verification/', views.resend_verification, name='resend-verification'),
 ] 

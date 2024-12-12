@@ -1,6 +1,6 @@
 from django.shortcuts import render
 from rest_framework import viewsets, permissions, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from django.db.models import Count
@@ -8,11 +8,14 @@ from django.db.models.functions import TruncDate
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .serializers import UserSerializer, UserCreateSerializer, UserProfileSerializer
+from .serializers import (
+    UserSerializer, UserCreateSerializer, UserProfileSerializer,
+    ResendVerificationSerializer, EmailVerificationSerializer
+)
 from .models import UserProfile
 from .filters import UserFilter
 
-User = get_user_model()
+UserModel = get_user_model()
 
 # Swagger parameters
 user_response = openapi.Response(
@@ -39,39 +42,8 @@ profile_request = openapi.Schema(
 )
 
 class UserViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint để quản lý users.
-    
-    list:
-    Trả về danh sách tất cả users.
-    * Yêu cầu xác thực JWT
-    * Hỗ trợ filtering và pagination
-    
-    create:
-    Tạo user mới.
-    * Không yêu cầu xác thực
-    * Trả về thông tin user và token
-    
-    retrieve:
-    Xem chi tiết một user.
-    * Yêu cầu xác thực JWT
-    
-    update:
-    Cập nhật toàn bộ thông tin user.
-    * Yêu cầu xác thực JWT
-    * Chỉ admin hoặc chính user đó mới có quyền
-    
-    partial_update:
-    Cập nhật một phần thông tin user.
-    * Yêu cầu xác thực JWT
-    * Chỉ admin hoặc chính user đó mới có quyền
-    
-    destroy:
-    Xóa user.
-    * Yêu cầu xác thực JWT
-    * Chỉ admin mới có quyền
-    """
-    queryset = User.objects.all()
+    """API endpoint để quản lý users"""
+    queryset = UserModel.objects.all()
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_class = UserFilter
@@ -82,23 +54,14 @@ class UserViewSet(viewsets.ModelViewSet):
         return UserSerializer
     
     def get_permissions(self):
-        if self.action == 'create':
+        if self.action in ['create', 'verify_email', 'resend_verification']:
             return [permissions.AllowAny()]
         return super().get_permissions()
     
     @swagger_auto_schema(
         method='get',
-        operation_description="""
-        Lấy thông tin của user hiện tại đang đăng nhập.
-        
-        Responses:
-        * 200: Thành công
-        * 401: Chưa xác thực
-        """,
-        responses={
-            200: user_response,
-            401: 'Unauthorized'
-        },
+        operation_description="Lấy thông tin của user hiện tại đang đăng nhập",
+        responses={200: user_response, 401: 'Unauthorized'},
         security=[{'Bearer': []}]
     )
     @action(detail=False, methods=['get'])
@@ -109,29 +72,9 @@ class UserViewSet(viewsets.ModelViewSet):
     
     @swagger_auto_schema(
         methods=['put', 'patch'],
-        operation_description="""
-        Cập nhật thông tin profile của user hiện tại.
-        
-        Example Request:
-        ```json
-        {
-            "first_name": "John",
-            "last_name": "Doe",
-            "profile": {
-                "bio": "Software Engineer",
-                "position": "Senior Developer",
-                "department": "Engineering",
-                "address": "123 Street"
-            }
-        }
-        ```
-        """,
+        operation_description="Cập nhật thông tin profile của user hiện tại",
         request_body=profile_request,
-        responses={
-            200: user_response,
-            400: 'Bad Request',
-            401: 'Unauthorized'
-        },
+        responses={200: user_response, 400: 'Bad Request', 401: 'Unauthorized'},
         security=[{'Bearer': []}]
     )
     @action(detail=False, methods=['put', 'patch'])
@@ -163,32 +106,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
     @swagger_auto_schema(
         method='get',
-        operation_description="""
-        Lấy thống kê về users trong hệ thống.
-        
-        Returns:
-        * total_users: Tổng số users
-        * active_users: Số users đang active
-        * role_distribution: Phân bố users theo role
-        * new_users_trend: Xu hướng users mới trong 7 ngày
-        
-        Example Response:
-        ```json
-        {
-            "total_users": 100,
-            "active_users": 85,
-            "role_distribution": [
-                {"role": "admin", "count": 5},
-                {"role": "staff", "count": 20},
-                {"role": "user", "count": 75}
-            ],
-            "new_users_trend": [
-                {"date": "2023-12-11", "count": 10},
-                {"date": "2023-12-10", "count": 8}
-            ]
-        }
-        ```
-        """,
+        operation_description="Lấy thống kê về users trong hệ thống",
         responses={
             200: openapi.Response(
                 description="Thống kê users",
@@ -206,16 +124,6 @@ class UserViewSet(viewsets.ModelViewSet):
                                     'count': openapi.Schema(type=openapi.TYPE_INTEGER)
                                 }
                             )
-                        ),
-                        'new_users_trend': openapi.Schema(
-                            type=openapi.TYPE_ARRAY,
-                            items=openapi.Schema(
-                                type=openapi.TYPE_OBJECT,
-                                properties={
-                                    'date': openapi.Schema(type=openapi.TYPE_STRING, format='date'),
-                                    'count': openapi.Schema(type=openapi.TYPE_INTEGER)
-                                }
-                            )
                         )
                     }
                 )
@@ -227,25 +135,93 @@ class UserViewSet(viewsets.ModelViewSet):
     )
     @action(detail=False, methods=['get'])
     def statistics(self, request):
-        """Endpoint để lấy th���ng kê về users"""
-        total_users = User.objects.count()
-        active_users = User.objects.filter(is_active=True).count()
+        """Endpoint để lấy thống kê về users"""
+        total_users = UserModel.objects.count()
+        active_users = UserModel.objects.filter(is_active=True).count()
         
         # Thống kê users theo role
-        role_stats = User.objects.values('role').annotate(
+        role_stats = UserModel.objects.values('role').annotate(
             count=Count('id')
         )
-        
-        # Thống kê users mới trong 7 ngày qua
-        new_users_by_date = User.objects.annotate(
-            date=TruncDate('date_joined')
-        ).values('date').annotate(
-            count=Count('id')
-        ).order_by('-date')[:7]
         
         return Response({
             'total_users': total_users,
             'active_users': active_users,
-            'role_distribution': role_stats,
-            'new_users_trend': new_users_by_date
+            'role_distribution': role_stats
         })
+
+
+@swagger_auto_schema(
+    method='post',
+    operation_description="Xác thực email thông qua token",
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['token'],
+        properties={
+            'token': openapi.Schema(type=openapi.TYPE_STRING)
+        }
+    ),
+    responses={
+        200: openapi.Response(
+            description="Email đã được xác thực thành công",
+            schema=openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'message': openapi.Schema(type=openapi.TYPE_STRING)
+                }
+            )
+        ),
+        400: 'Token không hợp lệ hoặc đã hết hạn'
+    }
+)
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def verify_email(request):
+    """View để xác thực email"""
+    serializer = EmailVerificationSerializer(data=request.data)
+    if serializer.is_valid():
+        return Response(
+            {'message': 'Email đã được xác thực thành công'},
+            status=status.HTTP_200_OK
+        )
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@swagger_auto_schema(
+    method='post',
+    operation_description="Gửi lại email xác thực",
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['email'],
+        properties={
+            'email': openapi.Schema(type=openapi.TYPE_STRING)
+        }
+    ),
+    responses={
+        200: openapi.Response(
+            description="Email xác thực đã được gửi lại",
+            schema=openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'message': openapi.Schema(type=openapi.TYPE_STRING)
+                }
+            )
+        ),
+        400: 'Email không hợp lệ hoặc đã được xác thực'
+    }
+)
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def resend_verification(request):
+    """View để gửi lại email xác thực"""
+    serializer = ResendVerificationSerializer(data=request.data)
+    if serializer.is_valid():
+        try:
+            result = serializer.save()
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {'message': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
