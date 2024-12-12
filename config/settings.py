@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     # Local apps
     'apps.core',
     'apps.users',
+    'django_elasticsearch_dsl',
 ]
 
 MIDDLEWARE = [
@@ -330,3 +331,9 @@ else:
         'DELETE',
         'OPTIONS'
     ]
+
+ELASTICSEARCH_DSL = {
+    'default': {
+        'hosts': 'localhost:9200'
+    }
+}

@@ -1,9 +1,10 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from .views import UserViewSet
 
 router = DefaultRouter()
-router.register('users', views.UserViewSet)
+router.register(r'users', UserViewSet, basename='user')
 
 app_name = 'users'
 

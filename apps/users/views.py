@@ -14,6 +14,7 @@ from .serializers import (
 )
 from .models import UserProfile
 from .filters import UserFilter
+from .search.services import UserSearchService
 
 UserModel = get_user_model()
 
@@ -47,6 +48,10 @@ class UserViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_class = UserFilter
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.search_service = UserSearchService()
     
     def get_serializer_class(self):
         if self.action == 'create':
@@ -149,6 +154,38 @@ class UserViewSet(viewsets.ModelViewSet):
             'active_users': active_users,
             'role_distribution': role_stats
         })
+
+    @action(detail=False, methods=['get'])
+    def search(self, request):
+        """
+        Tìm kiếm user
+        """
+        query = request.query_params.get('q', '')
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 10))
+        
+        results = self.search_service.search(
+            query=query,
+            page=page,
+            page_size=page_size
+        )
+        
+        return Response(results)
+    
+    @action(detail=False, methods=['get'])
+    def suggest(self, request):
+        """
+        Gợi ý tìm kiếm
+        """
+        query = request.query_params.get('q', '')
+        limit = int(request.query_params.get('limit', 5))
+        
+        suggestions = self.search_service.suggest(
+            query=query,
+            limit=limit
+        )
+        
+        return Response(suggestions)
 
 
 @swagger_auto_schema(
